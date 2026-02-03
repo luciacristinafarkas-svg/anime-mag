@@ -126,6 +126,7 @@ export default function IssuePage() {
           padding: 18,
           background: "white",
           boxShadow: "0 8px 30px rgba(0,0,0,0.06)",
+          direction: "rtl",
         }}
       >
         <div
@@ -148,8 +149,11 @@ export default function IssuePage() {
             gap: 16,
           }}
         >
-          {pagePanels.map((scene, idx) => {
-            const panelNumber = (page - 1) * panelsPerPage + idx + 1;
+          {[...pagePanels].reverse().map((scene, idx) => {
+          
+const originalIdx = panelsPerPage - 1 - idx;
+const panelNumber = (page - 1) * panelsPerPage + originalIdx + 1;
+
             return (
               <div
                 key={panelNumber}
@@ -196,6 +200,9 @@ export default function IssuePage() {
                       borderRadius: 14,
                       background: "rgba(0,0,0,0.05)",
                       lineHeight: 1.45,
+                      direction: "ltr",
+                      textAlign: "left",
+
                     }}
                   >
                     {scene}
@@ -216,12 +223,16 @@ export default function IssuePage() {
           gap: 10,
         }}
       >
-        <button onClick={prev} disabled={page === 1}>
-          ◀ Prev
-        </button>
         <button onClick={next} disabled={page === totalPages}>
-          Next ▶
+          ◀ Next
         </button>
+        <span style={{ opacity: 0.75 }}>
+          Page <b>{page}</b> / {totalPages}
+        </span>
+        <button onClick={prev} disabled={page === 1}>
+          Prev ▶
+        </button>
+
       </div>
     </main>
   );
