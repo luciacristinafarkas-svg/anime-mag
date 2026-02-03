@@ -29,7 +29,7 @@ export default function CreatePage() {
    const res = await fetch("/api/generate", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ theme, answers }),
+body: JSON.stringify({ theme: "romance", answers }),
 });
 
 const data = await res.json();
