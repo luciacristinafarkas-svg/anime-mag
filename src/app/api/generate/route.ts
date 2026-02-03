@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
