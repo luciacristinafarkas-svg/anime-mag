@@ -2,32 +2,72 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseAdmin } from "@/lib/supabase";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
 export async function POST(req: Request) {
-  const { theme, answers } = await req.json();
+  try {
+    const body = await req.json();
+    const { theme, answers } = body;
 
-  const { data: issue } = await supabaseAdmin
-    .from("issues")
-    .insert({ theme, answers })
-    .select("id")
-    .single();
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY is missing" },
+        { status: 500 }
+      );
+    }
 
-  const prompt = `
-Transform answers into a short anime-style story outline.
-Return JSON with title and 6 short scenes.
-Answers: ${JSON.stringify(answers)}
-`;
+    // 1. Insert issue
+    const { data: issue, error: insertError } = await supabaseAdmin
+      .from("issues")
+      .insert({ theme, answers })
+      .select("id")
+      .single();
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }]
-  });
+    if (insertError) {
+      return NextResponse.json(
+        { error: "Supabase insert failed", details: insertError },
+        { status: 500 }
+      );
+    }
 
-  await supabaseAdmin
-    .from("issues")
-    .update({ story_bible: completion.choices[0].message.content })
-    .eq("id", issue.id);
+    // 2. Call OpenAI (VERY simple)
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY!,
+    });
 
-  return NextResponse.json({ issueId: issue.id });
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: "Write a 3-sentence anime-style love story.",
+        },
+      ],
+    });
+
+    // 3. Update issue
+    const { error: updateError } = await supabaseAdmin
+      .from("issues")
+      .update({
+        story_bible: completion.choices[0].message.content,
+      })
+      .eq("id", issue.id);
+
+    if (updateError) {
+      return NextResponse.json(
+        { error: "Supabase update failed", details: updateError },
+        { status: 500 }
+      );
+    }
+
+    // 4. Success
+    return NextResponse.json({ issueId: issue.id });
+  } catch (err: any) {
+    return NextResponse.json(
+      {
+        error: "Unhandled exception",
+        message: err?.message,
+        stack: err?.stack,
+      },
+      { status: 500 }
+    );
+  }
 }
