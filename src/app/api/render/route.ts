@@ -14,7 +14,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing issueId" }, { status: 400 });
     }
 
-    // 1) Load issue + story
+    // 1) Load issue story
     const { data: issue, error: issueErr } = await supabaseAdmin
       .from("issues")
       .select("id, story_bible")
@@ -29,74 +29,106 @@ export async function POST(req: Request) {
     const story: Story =
       typeof raw === "string" ? (JSON.parse(raw) as Story) : (raw as Story);
 
-    const scenes = Array.isArray(story?.scenes) ? story.scenes : [];
+    const scenes = Array.isArray(story?.scenes) ? story.scenes.slice(0, 6) : [];
     if (scenes.length === 0) {
       return NextResponse.json({ error: "No scenes to render" }, { status: 400 });
     }
 
-    // 2) If panels already exist, don't duplicate
-    const { data: existing } = await supabaseAdmin
+    // 2) Ensure panels exist
+    const { data: existingPanels, error: panelsErr } = await supabaseAdmin
       .from("panels")
-      .select("id")
+      .select("id,page,panel,caption,image_url")
       .eq("issue_id", issueId)
-      .limit(1);
+      .order("page", { ascending: true })
+      .order("panel", { ascending: true });
 
-    if ((existing ?? []).length > 0) {
-      return NextResponse.json({ ok: true, skipped: true });
+    if (panelsErr) {
+      return NextResponse.json({ error: "Failed to load panels", details: panelsErr }, { status: 500 });
     }
 
-    const openaiKey = process.env.OPENAI_API_KEY;
-    const client = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
+    let panels = (existingPanels ?? []) as any[];
 
-    // 3) Create panels (and optionally generate images)
-    const rows: any[] = [];
+    if (panels.length === 0) {
+      const rows = scenes.map((caption, i) => ({
+        issue_id: issueId,
+        page: Math.floor(i / 2) + 1,
+        panel: (i % 2) + 1,
+        caption,
+        image_prompt:
+          `Black and white manga panel, high-contrast ink, screentone shading, ` +
+          `cinematic framing, no text, no watermark. Scene: ${caption}`,
+        image_url: null,
+      }));
 
-    for (let i = 0; i < Math.min(6, scenes.length); i++) {
-      const page = Math.floor(i / 2) + 1;
-      const panel = (i % 2) + 1;
-      const caption = scenes[i];
-
-      const imagePrompt =
-        `Black and white manga panel, high-contrast ink, screentone shading, ` +
-        `cinematic framing, no text, no watermark. Scene: ${caption}`;
-
-      let image_url: string | null = null;
-
-      // optional: generate image if key works
-      if (client) {
-        try {
-          // If your account has quota, this will return an image.
-          // If not, it will throw; we fall back to null.
-          const img = await client.images.generate({
-            model: "gpt-image-1",
-            prompt: imagePrompt,
-            size: "1024x1024",
-          });
-
-          // store as data URL (MVP)
-          const b64 = img.data?.[0]?.b64_json;
-          if (b64) image_url = `data:image/png;base64,${b64}`;
-        } catch {
-          image_url = null;
-        }
+      const { error: insErr } = await supabaseAdmin.from("panels").insert(rows);
+      if (insErr) {
+        return NextResponse.json({ error: "Insert panels failed", details: insErr }, { status: 500 });
       }
 
-      rows.push({
-        issue_id: issueId,
-        page,
-        panel,
-        caption,
-        image_prompt: imagePrompt,
-        image_url,
-      });
+      // reload
+      const { data: reloaded } = await supabaseAdmin
+        .from("panels")
+        .select("id,page,panel,caption,image_url")
+        .eq("issue_id", issueId)
+        .order("page", { ascending: true })
+        .order("panel", { ascending: true });
+
+      panels = (reloaded ?? []) as any[];
     }
 
-    const { error: insErr } = await supabaseAdmin.from("panels").insert(rows);
-    if (insErr) {
-      return NextResponse.json({ error: "Insert panels failed", details: insErr }, { status: 500 });
+    // 3) Generate images only for missing ones
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) {
+      return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, generated: true, count: rows.length });
+    const client = new OpenAI({ apiKey: key });
+
+    const toGen = panels.filter((p) => !p.image_url);
+    for (const p of toGen) {
+      const prompt =
+        `Black and white manga panel, high-contrast ink, screentone shading, ` +
+        `cinematic framing, no text, no watermark. Scene: ${p.caption}`;
+
+      try {
+        const img = await client.images.generate({
+          model: "gpt-image-1",
+          prompt,
+          size: "1024x1024",
+        });
+
+        const b64 = img.data?.[0]?.b64_json;
+        const image_url = b64 ? `data:image/png;base64,${b64}` : null;
+
+        await supabaseAdmin
+          .from("panels")
+          .update({ image_url, image_prompt: prompt })
+          .eq("id", p.id);
+
+      } catch (e: any) {
+        console.error("OpenAI image gen failed", {
+          panelId: p.id,
+          status: e?.status,
+          message: e?.message,
+          code: e?.code,
+        });
+        // keep null, move on
+      }
+    }
+
+    // 4) Return current panels (with images if any)
+    const { data: finalPanels, error: finalErr } = await supabaseAdmin
+      .from("panels")
+      .select("id,page,panel,caption,image_url")
+      .eq("issue_id", issueId)
+      .order("page", { ascending: true })
+      .order("panel", { ascending: true });
+
+    if (finalErr) {
+      return NextResponse.json({ error: "Failed to reload panels", details: finalErr }, { status: 500 });
+    }
+
+    return NextResponse.json(finalPanels ?? []);
   } catch (err: any) {
     return NextResponse.json(
       { error: "Unhandled exception", message: err?.message },
