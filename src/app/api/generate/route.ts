@@ -39,23 +39,41 @@ export async function POST(req: Request) {
       );
     }
 
-    // 3) OpenAI generate
-    const client = new OpenAI({ apiKey: openaiKey });
+// 3) Generate story (OpenAI OR fallback)
+let story: string;
 
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content:
-            "Return ONLY valid JSON with keys: title, logline, scenes (array of 6 short scenes). Theme: anime romance. Inputs: " +
-            JSON.stringify(answers ?? {}),
-        },
-      ],
-      response_format: { type: "json_object" }
-    });
+try {
+  const client = new OpenAI({ apiKey: openaiKey });
 
-    const story = completion.choices[0].message.content;
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "user",
+        content:
+          "Return ONLY valid JSON (no markdown) with keys: title, logline, scenes (array of 6 short scenes). Inputs: " +
+          JSON.stringify(answers ?? {}),
+      },
+    ],
+  });
+
+  story = completion.choices[0].message.content ?? "";
+} catch (e) {
+  // 🔴 FALLBACK când OpenAI dă 429 / no money
+  story = JSON.stringify({
+    title: "Fallback Anime Story",
+    logline: "A love story generated without AI, but with heart.",
+    scenes: [
+      "They meet by chance on an ordinary day.",
+      "A small detail catches one’s attention.",
+      "An unexpected conversation brings them closer.",
+      "A quiet moment reveals hidden feelings.",
+      "One honest sentence changes everything.",
+      "They walk forward together, uncertain but hopeful."
+    ]
+  });
+}
+
 
     // 4) Save story_bible
     const { error: updateError } = await supabaseAdmin
