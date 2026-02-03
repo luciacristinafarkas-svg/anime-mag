@@ -26,14 +26,22 @@ export default function CreatePage() {
   async function submit() {
     setLoading(true);
 
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ theme: "romance", answers })
-    });
+   const res = await fetch("/api/generate", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ theme, answers }),
+});
 
-    const data = await res.json();
-    router.push(`/issue/${data.issueId}`);
+const data = await res.json();
+
+if (!res.ok) {
+  alert(data.error ?? "Generation failed");
+  setLoading(false);
+  return;
+}
+
+router.push(`/issue/${data.issueId}`);
+
   }
 
   return (
