@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
@@ -10,230 +10,297 @@ type Story = {
   scenes: string[];
 };
 
+type PanelRow = {
+  id: string;
+  page: number;
+  panel: number;
+  caption: string | null;
+  image_url: string | null;
+};
+
 export default function IssuePage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
 
   const [loading, setLoading] = useState(true);
   const [story, setStory] = useState<Story | null>(null);
+
   const [page, setPage] = useState(1);
+  const panelsPerPage = 2;
+
+  // Panels din DB (pt imagini)
+  const [panels, setPanels] = useState<PanelRow[]>([]);
+  const [rendering, setRendering] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
+
+  // Page-flip drag
+  const [dragging, setDragging] = useState(false);
+  const [dragP, setDragP] = useState(0); // 0..1
+  const startX = useRef<number | null>(null);
+
+  // Animatie swap page (simple)
+  const [pageKey, setPageKey] = useState(0);
 
   useEffect(() => {
     if (!id) return;
 
     (async () => {
       setLoading(true);
+
       const { data, error } = await supabase
         .from("issues")
         .select("id, story_bible")
         .eq("id", id)
         .single();
 
-      if (error) {
+      if (error || !data) {
         setStory(null);
         setLoading(false);
         return;
       }
 
-      const raw = data?.story_bible;
-
-      // story_bible may be stringified JSON or jsonb
+      const raw = data.story_bible;
       const parsed =
         typeof raw === "string" ? (JSON.parse(raw) as Story) : (raw as Story);
 
+      // safety
+      parsed.scenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
+
       setStory(parsed);
-      setLoading(false);
       setPage(1);
+      setLoading(false);
     })();
   }, [id]);
 
-  const panelsPerPage = 2;
+  // load panels (imagini) din DB
+  useEffect(() => {
+    if (!id) return;
+
+    (async () => {
+      const { data } = await supabase
+        .from("panels")
+        .select("id,page,panel,caption,image_url")
+        .eq("issue_id", id)
+        .order("page", { ascending: true })
+        .order("panel", { ascending: true });
+
+      setPanels((data ?? []) as PanelRow[]);
+    })();
+  }, [id, rendering]);
 
   const totalPages = useMemo(() => {
     const n = story?.scenes?.length ?? 0;
     return Math.max(1, Math.ceil(n / panelsPerPage));
   }, [story]);
 
-  const pagePanels = useMemo(() => {
+  const pagePanelsText = useMemo(() => {
     if (!story) return [];
     const start = (page - 1) * panelsPerPage;
     return story.scenes.slice(start, start + panelsPerPage);
   }, [story, page]);
 
+  // Dacă ai panels din DB, preferă-le (când există)
+  const pagePanelsFromDb = useMemo(() => {
+    return panels.filter((p) => p.page === page).sort((a, b) => a.panel - b.panel);
+  }, [panels, page]);
+
   function prev() {
-    setPage((p) => Math.max(1, p - 1));
+    setPage((p) => {
+      const np = Math.max(1, p - 1);
+      setPageKey((k) => k + 1);
+      return np;
+    });
   }
+
   function next() {
-    setPage((p) => Math.min(totalPages, p + 1));
+    setPage((p) => {
+      const np = Math.min(totalPages, p + 1);
+      setPageKey((k) => k + 1);
+      return np;
+    });
+  }
+
+  // Manga: NEXT cu drag din colț stânga-jos
+  function onPointerDown(e: React.PointerEvent) {
+    if (page >= totalPages) return;
+    setDragging(true);
+    startX.current = e.clientX;
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!dragging || startX.current == null) return;
+    const dx = e.clientX - startX.current; // tragi spre dreapta
+    const p = Math.min(1, Math.max(0, dx / 260));
+    setDragP(p);
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    setDragging(false);
+
+    // threshold
+    if (dragP > 0.45) {
+      setDragP(0);
+      next();
+      return;
+    }
+    setDragP(0);
+  }
+
+  async function generateImages() {
+    if (!id) return;
+
+    setRendering(true);
+    setRenderProgress(0);
+
+    // UX simplu: progres fake + call server
+    const t = setInterval(() => {
+      setRenderProgress((p) => Math.min(0.9, p + 0.06));
+    }, 240);
+
+    try {
+      const res = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueId: id }),
+      });
+
+      await res.json().catch(() => ({}));
+      setRenderProgress(1);
+      setTimeout(() => setRendering(false), 450);
+    } finally {
+      clearInterval(t);
+    }
   }
 
   if (loading) {
     return (
-      <main style={{ maxWidth: 980, margin: "40px auto", padding: 16 }}>
-        <h1>Loading…</h1>
+      <main className="manga-wrap">
+        <div className="manga-header">
+          <h1>Loading…</h1>
+        </div>
       </main>
     );
   }
 
   if (!story) {
     return (
-      <main style={{ maxWidth: 980, margin: "40px auto", padding: 16 }}>
-        <h1>Not found</h1>
-        <p>Could not load this issue.</p>
+      <main className="manga-wrap">
+        <div className="manga-header">
+          <h1>Not found</h1>
+          <p>Could not load this issue.</p>
+        </div>
       </main>
     );
   }
 
+  const useDbPanels = pagePanelsFromDb.length > 0;
+
   return (
-    <main style={{ maxWidth: 980, margin: "40px auto", padding: 16 }}>
+    <main className="manga-wrap">
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="manga-header">
         <div>
-          <h1 style={{ margin: 0 }}>{story.title}</h1>
-          <p style={{ margin: "8px 0 0", opacity: 0.75, fontStyle: "italic" }}>
-            {story.logline}
-          </p>
+          <h1 className="manga-title">{story.title}</h1>
+          <p className="manga-logline">{story.logline}</p>
         </div>
 
-        {/* Pager */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={prev} disabled={page === 1}>
-            ◀ Prev
-          </button>
-          <span style={{ opacity: 0.75 }}>
-            Page <b>{page}</b> / {totalPages}
-          </span>
-          <button onClick={next} disabled={page === totalPages}>
-            Next ▶
+        <div className="manga-actions">
+          <button className="btn" onClick={generateImages} disabled={rendering}>
+            {rendering ? "Rendering…" : "Generate images"}
           </button>
         </div>
       </div>
 
-      {/* “Manga page” sheet */}
-      <div
-        style={{
-          marginTop: 24,
-          border: "1px solid rgba(0,0,0,0.12)",
-          borderRadius: 18,
-          padding: 18,
-          background: "white",
-          boxShadow: "0 8px 30px rgba(0,0,0,0.06)",
-          direction: "rtl",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            opacity: 0.6,
-            fontSize: 13,
-            marginBottom: 12,
-          }}
-        >
+      {/* Sheet */}
+      <div className="sheet" style={{ direction: "rtl" }}>
+        <div className="sheet-meta">
           <span>Issue #{String(id).slice(0, 6)}</span>
           <span>Page {page}</span>
         </div>
 
+        {/* Page flip overlay (animat de drag) */}
         <div
+          className="flipOverlay"
           style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: 16,
+            opacity: dragging ? 1 : 0,
+            transform: `translateX(${(1 - dragP) * 18}px) rotateY(${(1 - dragP) * 55}deg)`,
           }}
-        >
-          {[...pagePanels].reverse().map((scene, idx) => {
-          
-const originalIdx = panelsPerPage - 1 - idx;
-const panelNumber = (page - 1) * panelsPerPage + originalIdx + 1;
+        />
 
+        {/* Corner handle */}
+        <div
+          className={`corner ${page >= totalPages ? "cornerDisabled" : ""}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        />
+
+        <div key={pageKey} className="page">
+          {(useDbPanels ? pagePanelsFromDb : pagePanelsText.map((t, i) => ({
+            id: `tmp-${i}`,
+            page,
+            panel: i + 1,
+            caption: t,
+            image_url: null,
+          }))).map((p, idx) => {
+            const panelNumber = (page - 1) * panelsPerPage + idx + 1;
             return (
-              <div
-                key={panelNumber}
-                style={{
-                  border: "1px solid rgba(0,0,0,0.10)",
-                  borderRadius: 16,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "10px 14px",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    borderBottom: "1px solid rgba(0,0,0,0.08)",
-                    background: "rgba(0,0,0,0.02)",
-                  }}
-                >
+              <section key={p.id} className="panel">
+                <div className="panelTop">
                   <b>Panel {panelNumber}</b>
-                  <span style={{ opacity: 0.6 }}>Frame</span>
+                  <span>Frame</span>
                 </div>
 
-                {/* Image placeholder */}
-                <div
-                  style={{
-                    height: 320,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderBottom: "1px solid rgba(0,0,0,0.08)",
-                    background:
-                      "repeating-linear-gradient(45deg, rgba(0,0,0,0.03), rgba(0,0,0,0.03) 10px, rgba(0,0,0,0.01) 10px, rgba(0,0,0,0.01) 20px)",
-                  }}
-                >
-                  <span style={{ opacity: 0.6 }}>(image placeholder)</span>
+                <div className="panelImg">
+                  {p.image_url ? (
+                    // dacă salvezi base64/dataURL sau URL public
+                    <img src={p.image_url} alt={`Panel ${panelNumber}`} />
+                  ) : (
+                    <div className="placeholder">(image placeholder)</div>
+                  )}
                 </div>
 
-                {/* Caption / bubble */}
-                <div style={{ padding: 14 }}>
-                  <div
-                    style={{
-                      display: "inline-block",
-                      padding: "10px 12px",
-                      borderRadius: 14,
-                      background: "rgba(0,0,0,0.05)",
-                      lineHeight: 1.45,
-                      direction: "ltr",
-                      textAlign: "left",
-
-                    }}
-                  >
-                    {scene}
-                  </div>
+                <div className="panelCaption">
+                  <span className="bubble">{p.caption ?? ""}</span>
                 </div>
-              </div>
+              </section>
             );
           })}
         </div>
       </div>
 
-      {/* Bottom pager (nice on mobile) */}
-      <div
-        style={{
-          marginTop: 18,
-          display: "flex",
-          justifyContent: "center",
-          gap: 10,
-        }}
-      >
-        <button onClick={next} disabled={page === totalPages}>
+      {/* Pager jos (în manga “Next” e pe stânga) */}
+      <div className="pager">
+        <button className="btn" onClick={next} disabled={page === totalPages}>
           ◀ Next
         </button>
-        <span style={{ opacity: 0.75 }}>
+
+        <span className="pagerText">
           Page <b>{page}</b> / {totalPages}
         </span>
-        <button onClick={prev} disabled={page === 1}>
+
+        <button className="btn" onClick={prev} disabled={page === 1}>
           Prev ▶
         </button>
-
       </div>
+
+      {/* Loading overlay pt “generate all 6 behind screen” */}
+      {rendering && (
+        <div className="renderOverlay">
+          <div className="renderCard">
+            <div className="renderTitle">Rendering panels…</div>
+            <div className="renderBar">
+              <div className="renderFill" style={{ width: `${renderProgress * 100}%` }} />
+            </div>
+            <div className="renderHint">
+              Tip: în manga, tragi colțul stânga-jos ca să dai pagina.
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
