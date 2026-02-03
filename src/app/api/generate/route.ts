@@ -8,22 +8,13 @@ export async function POST(req: Request) {
   try {
     const { theme, answers } = await req.json();
 
-    // 1) ENV checks (ca sa nu mai fie silent)
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseService = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const openaiKey = process.env.OPENAI_API_KEY;
+   const openaiKey = process.env.OPENAI_API_KEY;
 
-    if (!supabaseUrl) {
-      return NextResponse.json({ error: "Missing NEXT_PUBLIC_SUPABASE_URL" }, { status: 500 });
-    }
-    if (!supabaseService) {
-      return NextResponse.json({ error: "Missing SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
-    }
-    if (!openaiKey) {
-      return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
-    }
+if (!openaiKey) {
+  return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
+}
 
-    const supabaseAdmin = createClient(supabaseUrl, supabaseService);
+ 
 
     // 2) Insert into issues
     const { data: issue, error: insertError } = await supabaseAdmin
