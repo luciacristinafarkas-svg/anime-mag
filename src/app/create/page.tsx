@@ -23,26 +23,30 @@ export default function CreatePage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  async function submit() {
-    setLoading(true);
+async function submit() {
+  setLoading(true);
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ theme: "romance", answers }),
+    });
 
-   const res = await fetch("/api/generate", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-body: JSON.stringify({ theme: "romance", answers }),
-});
+    const data = await res.json();
 
-const data = await res.json();
+    if (!res.ok) {
+      alert(data.error ?? "Generation failed");
+      return;
+    }
 
-if (!res.ok) {
-  alert(data.error ?? "Generation failed");
-  setLoading(false);
-  return;
+    router.push(`/issue/${data.issueId}`);
+  } catch (e: any) {
+    alert(e?.message ?? "Network error");
+  } finally {
+    setLoading(false);
+  }
 }
 
-router.push(`/issue/${data.issueId}`);
-
-  }
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", padding: 16 }}>
